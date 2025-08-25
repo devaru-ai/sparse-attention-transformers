@@ -1,7 +1,7 @@
 import os
 from datasets import load_dataset
 
-raw_dir = '/content/drive/MyDrive/transformer_project/data/raw'
+raw_dir = os.path.join("data", "raw")
 os.makedirs(raw_dir, exist_ok=True)
 
 dataset = load_dataset("Helsinki-NLP/opus_books", "de-en")
