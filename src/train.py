@@ -1,24 +1,48 @@
+import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from src.model.transformer import Transformer
+from src.model.registry import get_model
 from src.model.utils import load_vocab, load_encoded, pad_batch
+import os   
 
+# Ensure checkpoint directory exists
+checkpoint_dir = "../outputs/checkpoints"
+os.makedirs(checkpoint_dir, exist_ok=True)
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--model', choices=['transformer'], default='transformer')
+parser.add_argument('--d_model', type=int, default=128)
+parser.add_argument('--d_ff', type=int, default=256)
+parser.add_argument('--num_heads', type=int, default=4)
+parser.add_argument('--num_layers', type=int, default=2)
+parser.add_argument('--max_len', type=int, default=128)
+parser.add_argument('--batch_size', type=int, default=32)
+parser.add_argument('--epochs', type=int, default=10)
+parser.add_argument('--lr', type=float, default=1e-3)
+args = parser.parse_args()
 
 src_vocab = load_vocab("data/processed/vocab.src")
 tgt_vocab = load_vocab("data/processed/vocab.tgt")
-src_train = load_encoded("data/processed/train.src")
-tgt_train = load_encoded("data/processed/train.tgt")
+#src_train = load_encoded("data/processed/train.src")
+#tgt_train = load_encoded("data/processed/train.tgt")
+src_train = load_encoded("data/processed/train_small.src")
+tgt_train = load_encoded("data/processed/train_small.tgt")
 
-batch_size = 32
-n_epochs = 10
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-model = Transformer(len(src_vocab), len(tgt_vocab), d_model=128, d_ff=256, num_heads=4, num_layers=2, max_len=128).to(device)
+model = get_model(
+    args.model,
+    len(src_vocab), len(tgt_vocab),
+    d_model=args.d_model,
+    d_ff=args.d_ff,
+    num_heads=args.num_heads,
+    num_layers=args.num_layers,
+    max_len=args.max_len
+).to(device)
 
-
-#model = Transformer(len(src_vocab), len(tgt_vocab), d_model=128, d_ff=256, num_heads=4, num_layers=2, max_len=128).to(device)
-optimizer = optim.Adam(model.parameters(), lr=1e-3)
+optimizer = optim.Adam(model.parameters(), lr=args.lr)
 loss_fn = nn.CrossEntropyLoss(ignore_index=0)
 
 def get_batches(src_list, tgt_list, batch_size):
@@ -29,10 +53,10 @@ def get_batches(src_list, tgt_list, batch_size):
         tgt = torch.tensor(tgt, dtype=torch.long, device=device)
         yield src, tgt
 
-for epoch in range(n_epochs):
+for epoch in range(args.epochs):
     model.train()
     total_loss = 0
-    for src_b, tgt_b in get_batches(src_train, tgt_train, batch_size):
+    for src_b, tgt_b in get_batches(src_train, tgt_train, args.batch_size):
         dec_in = tgt_b[:, :-1]
         dec_target = tgt_b[:, 1:]
         optimizer.zero_grad()
@@ -42,4 +66,4 @@ for epoch in range(n_epochs):
         optimizer.step()
         total_loss += loss.item()
     print(f"Epoch {epoch+1} Loss: {total_loss:.4f}")
-    torch.save(model.state_dict(), f"../outputs/checkpoints/model_epoch{epoch+1}.pt")
+    torch.save(model.state_dict(), f"../outputs/checkpoints/model_epoch{epoch+1}_{args.model}.pt")
