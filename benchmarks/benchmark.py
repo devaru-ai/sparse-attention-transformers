@@ -26,6 +26,7 @@ def decode_tokens(tokens, inv_vocab):
     return [inv_vocab.get(idx, "<unk>") for idx in tokens if idx > 2]
 
 def evaluate_metrics(model, src_test, tgt_test, batch_size, device, inv_tgt_vocab):
+    print("Evaluating metrics...")
     model.eval()
     total_correct, total_tokens = 0, 0
     all_preds, all_refs = [], []
@@ -38,6 +39,12 @@ def evaluate_metrics(model, src_test, tgt_test, batch_size, device, inv_tgt_voca
             dec_in = tgt_tensor[:, :-1]
             dec_target = tgt_tensor[:, 1:]
             logits = model(src_tensor, dec_in)
+            # Safely slice outputs for metrics
+            if isinstance(logits, tuple):  # Allow for (logits, reg_loss)
+                logits = logits[0]
+            seq_len = min(logits.shape[1], dec_target.shape[1])
+            logits = logits[:, :seq_len, :]
+            dec_target = dec_target[:, :seq_len]
             preds = logits.argmax(-1).cpu().tolist()
             refs = dec_target.cpu().tolist()
             total_correct += (torch.tensor(preds) == torch.tensor(refs)).sum().item()
@@ -57,9 +64,11 @@ def evaluate_metrics(model, src_test, tgt_test, batch_size, device, inv_tgt_voca
     avg_rouge1 = np.mean(rouge1_scores)
     avg_rougeL = np.mean(rougeL_scores)
     accuracy = total_correct / total_tokens if total_tokens else 0.0
+    print(f"BLEU: {bleu:.4f}, ROUGE1: {avg_rouge1:.4f}, ROUGE-L: {avg_rougeL:.4f}, Accuracy: {accuracy:.4f}")
     return accuracy, bleu, avg_rouge1, avg_rougeL
 
 def benchmark_model(model_name, config, data_files, test_files, inv_tgt_vocab, seed, results_writer):
+    print("="*50)
     print(f"Running benchmark for {model_name} | config: {config}")
     set_seed(seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -67,6 +76,7 @@ def benchmark_model(model_name, config, data_files, test_files, inv_tgt_vocab, s
     tgt_vocab = load_vocab(data_files["tgt_vocab"])
     src_train = load_encoded(data_files["src_train"])
     tgt_train = load_encoded(data_files["tgt_train"])
+    print("Instantiating model...")
     model = get_model(
         model_name,
         len(src_vocab), len(tgt_vocab),
@@ -86,6 +96,7 @@ def benchmark_model(model_name, config, data_files, test_files, inv_tgt_vocab, s
     for epoch in range(config['epochs']):
         model.train()
         total_loss = 0
+        print(f"  [Training: epoch {epoch+1}/{config['epochs']}]")
         for i in range(0, len(src_train), batch_size):
             src_batch = pad_batch(src_train[i:i+batch_size])
             tgt_batch = pad_batch(tgt_train[i:i+batch_size])
@@ -95,16 +106,28 @@ def benchmark_model(model_name, config, data_files, test_files, inv_tgt_vocab, s
             dec_target = tgt_tensor[:, 1:]
             optimizer.zero_grad()
             logits = model(src_tensor, dec_in)
-            loss = loss_fn(logits.reshape(-1, logits.size(-1)), dec_target.reshape(-1))
+            # Safely handle tuple output
+            if isinstance(logits, tuple):
+                logits, reg_loss = logits
+            else:
+                reg_loss = torch.tensor(0.0, device=device)
+            # Slice outputs for safe loss
+            seq_len = min(logits.shape[1], dec_target.shape[1])
+            if logits.shape[1] != dec_target.shape[1]:
+                print(f"WARNING: Logits {logits.shape[1]} vs target {dec_target.shape[1]}. Slicing both to {seq_len}.")
+            logits = logits[:, :seq_len, :]
+            dec_target = dec_target[:, :seq_len]
+            loss = loss_fn(logits.reshape(-1, logits.size(-1)), dec_target.reshape(-1)) + reg_loss
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-        print(f"Epoch {epoch+1} Loss: {total_loss:.4f}")
+        print(f"  Epoch {epoch+1} loss: {total_loss:.4f}")
 
     train_time = time.time() - start_train
     peak_mem = torch.cuda.max_memory_allocated(device=device) if torch.cuda.is_available() else None
     param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+    print("Evaluating model on test set...")
     start_inf = time.time()
     model.eval()
     src_test = load_encoded(test_files["src_test"])
@@ -128,11 +151,16 @@ def benchmark_model(model_name, config, data_files, test_files, inv_tgt_vocab, s
 
 def main():
     os.makedirs("benchmarks/results", exist_ok=True)
+    # Add configs for smallest (debug) to largest (production) runs
     configs = [
-        dict(model="transformer", d_model=128, d_ff=256, num_heads=4, num_layers=2, max_len=128, batch_size=32, epochs=2, lr=1e-3),
-        dict(model="transformer", d_model=128, d_ff=256, num_heads=4, num_layers=2, max_len=256, batch_size=32, epochs=2, lr=1e-3),
-        dict(model="reformer", d_model=128, d_ff=256, num_heads=4, num_layers=2, max_len=128, batch_size=32, epochs=2, lr=1e-3),
-        dict(model="reformer", d_model=256, d_ff=512, num_heads=8, num_layers=4, max_len=128, batch_size=32, epochs=2, lr=1e-3),
+        #dict(model="transformer", d_model=128, d_ff=256, num_heads=4, num_layers=2, max_len=128, batch_size=32, epochs=2, lr=1e-3),
+        #dict(model="transformer", d_model=128, d_ff=256, num_heads=4, num_layers=2, max_len=256, batch_size=32, epochs=2, lr=1e-3),
+        #dict(model="reformer", d_model=128, d_ff=256, num_heads=4, num_layers=2, max_len=128, batch_size=32, epochs=2, lr=1e-3),
+        #dict(model="reformer", d_model=256, d_ff=512, num_heads=8, num_layers=4, max_len=128, batch_size=32, epochs=2, lr=1e-3),
+        # Tiny debug config:
+        dict(model="reformer_pp", d_model=64, d_ff=128, num_heads=2, num_layers=1, max_len=8, batch_size=2, epochs=1, lr=1e-3),
+        # Large config:
+        dict(model="reformer_pp", d_model=512, d_ff=2048, num_heads=8, num_layers=6, max_len=256, batch_size=32, epochs=1, lr=1e-3),
     ]
 
     data_files = dict(
