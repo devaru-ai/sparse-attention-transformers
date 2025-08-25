@@ -2,8 +2,8 @@ import os
 import re
 from collections import Counter
 
-raw_dir = '/content/drive/MyDrive/transformer_project/data/raw'
-processed_dir = '/content/drive/MyDrive/transformer_project/data/processed'
+raw_dir = 'data/raw'
+processed_dir = 'data/processed'
 os.makedirs(processed_dir, exist_ok=True)
 
 def clean(text):
