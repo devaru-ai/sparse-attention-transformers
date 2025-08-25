@@ -6,7 +6,6 @@ import random
 import torch
 import numpy as np
 
-# BLEU & ROUGE integration
 import nltk
 from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
 from rouge_score import rouge_scorer
@@ -14,9 +13,8 @@ from rouge_score import rouge_scorer
 from src.model.registry import get_model
 from src.model.utils import load_vocab, load_encoded, pad_batch
 
-nltk.download('punkt', quiet=True)  # Ensure NLTK data is available
+nltk.download('punkt', quiet=True)
 
-# --------------- Reproducibility ---------------
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -24,7 +22,6 @@ def set_seed(seed):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-# --------------- Accuracy, BLEU, ROUGE Evaluation ---------------
 def decode_tokens(tokens, inv_vocab):
     return [inv_vocab.get(idx, "<unk>") for idx in tokens if idx > 2]
 
@@ -47,10 +44,8 @@ def evaluate_metrics(model, src_test, tgt_test, batch_size, device, inv_tgt_voca
             total_tokens += torch.tensor(refs).numel()
             all_preds.extend([decode_tokens(p, inv_tgt_vocab) for p in preds])
             all_refs.extend([[decode_tokens(r, inv_tgt_vocab)] for r in refs])
-    # BLEU
     smoother = SmoothingFunction().method4
     bleu = corpus_bleu(all_refs, all_preds, smoothing_function=smoother)
-    # ROUGE
     pred_strs = [" ".join(p) for p in all_preds]
     ref_strs = [" ".join(r[0]) for r in all_refs]
     scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
@@ -64,17 +59,14 @@ def evaluate_metrics(model, src_test, tgt_test, batch_size, device, inv_tgt_voca
     accuracy = total_correct / total_tokens if total_tokens else 0.0
     return accuracy, bleu, avg_rouge1, avg_rougeL
 
-# --------------- Benchmark Runner ---------------
 def benchmark_model(model_name, config, data_files, test_files, inv_tgt_vocab, seed, results_writer):
     print(f"Running benchmark for {model_name} | config: {config}")
-
     set_seed(seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     src_vocab = load_vocab(data_files["src_vocab"])
     tgt_vocab = load_vocab(data_files["tgt_vocab"])
     src_train = load_encoded(data_files["src_train"])
     tgt_train = load_encoded(data_files["tgt_train"])
-
     model = get_model(
         model_name,
         len(src_vocab), len(tgt_vocab),
@@ -84,12 +76,10 @@ def benchmark_model(model_name, config, data_files, test_files, inv_tgt_vocab, s
         num_layers=config["num_layers"],
         max_len=config["max_len"]
     ).to(device)
-
     optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
     loss_fn = torch.nn.CrossEntropyLoss(ignore_index=0)
     batch_size = config["batch_size"]
 
-    # Memory & timing init
     torch.cuda.reset_peak_memory_stats(device=device) if torch.cuda.is_available() else None
     start_train = time.time()
 
@@ -115,7 +105,6 @@ def benchmark_model(model_name, config, data_files, test_files, inv_tgt_vocab, s
     peak_mem = torch.cuda.max_memory_allocated(device=device) if torch.cuda.is_available() else None
     param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    # Inference and metrics
     start_inf = time.time()
     model.eval()
     src_test = load_encoded(test_files["src_test"])
@@ -123,7 +112,6 @@ def benchmark_model(model_name, config, data_files, test_files, inv_tgt_vocab, s
     acc, bleu, rouge1, rougeL = evaluate_metrics(model, src_test, tgt_test, batch_size, device, inv_tgt_vocab)
     inf_time = time.time() - start_inf
 
-    # Log results to CSV
     results_writer.writerow({
         "model": model_name,
         "config": str(config),
@@ -143,8 +131,8 @@ def main():
     configs = [
         dict(model="transformer", d_model=128, d_ff=256, num_heads=4, num_layers=2, max_len=128, batch_size=32, epochs=2, lr=1e-3),
         dict(model="transformer", d_model=128, d_ff=256, num_heads=4, num_layers=2, max_len=256, batch_size=32, epochs=2, lr=1e-3),
-        dict(model="transformer", d_model=128, d_ff=256, num_heads=4, num_layers=2, max_len=128, batch_size=64, epochs=2, lr=1e-3),
-        # Add configs for reformer, rev_att, etc.
+        dict(model="reformer", d_model=128, d_ff=256, num_heads=4, num_layers=2, max_len=128, batch_size=32, epochs=2, lr=1e-3),
+        dict(model="reformer", d_model=256, d_ff=512, num_heads=8, num_layers=4, max_len=128, batch_size=32, epochs=2, lr=1e-3),
     ]
 
     data_files = dict(
@@ -159,7 +147,6 @@ def main():
         tgt_test="data/processed/test.tgt"
     )
 
-    # Prepare accuracy translation dict
     tgt_vocab = load_vocab(data_files['tgt_vocab'])
     inv_tgt_vocab = {v: k for k, v in tgt_vocab.items()}
 
